@@ -1,4 +1,4 @@
-# $Id: mirror_sites.tcl,v 1.32 2005/12/12 18:08:12 toby Exp $
+# $Id: mirror_sites.tcl,v 1.31.4.1 2005/12/12 18:33:51 jmpp Exp $
 # mirror_sites.tcl
 #
 # List of master site classes for use in Portfiles
