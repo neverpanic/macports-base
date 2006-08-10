@@ -1,6 +1,6 @@
 /*
  * curl.c
- * $Id: curl.c,v 1.11 2006/08/02 00:32:02 pguyot Exp $
+ * $Id: curl.c,v 1.10.2.1 2006/08/05 14:36:34 jberry Exp $
  *
  * Copyright (c) 2005 Paul Guyot, Darwinports Team.
  * All rights reserved.
