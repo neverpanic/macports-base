@@ -246,7 +246,7 @@ proc configure_main {args} {
                 f77 ${prefix}/bin/gfortran-mp-4.3 \
                 f90 ${prefix}/bin/gfortran-mp-4.3 }
         default {
-            ui_debug "No compiler collection selected explicitly" }
+            return -code error "Invalid value for configure.compiler" }
     }
     
     if {[tbool use_xmkmf]} {
