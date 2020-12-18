@@ -623,9 +623,6 @@ static char *__send(const char *buf, uint32_t len, int answer) {
 	}
 
 	recv_buf = malloc(recv_len + 1);
-	if (recv_buf == NULL) {
-		return NULL;
-	}
 	recv_buf[recv_len] = '\0';
 	frecv(recv_buf, recv_len);
 
@@ -785,63 +782,6 @@ static void __darwintrace_ensure_size_pathcomponents(path_component_t **componen
 	}
 }
 
-/*
- * Helper function for __darwintrace_is_in_sandbox.
- *
- * \param[in] token path to parse
- * \param[in] dstoffset write offset in normPath buffer
- * \param[in] numComponents number of parsed components
- * \param[in,out] pathComponents array of parsed components
- * \param[out] normPath output buffer
- * \return next numComponents
- */
-static size_t __parse_path_normalize(const char *token, size_t *dstoffset, size_t numComponents, path_component_t *pathComponents, size_t *maxPathComponents, char *normPath, size_t *normPathLen) {
-	while (*token != '\0') {
-		size_t idx = strcspn(token, "/");
-		// found a token, process it
-
-		if (token[0] == '\0' || token[0] == '/') {
-			// empty entry, ignore
-		} else if (token[0] == '.' && (token[1] == '\0' || token[1] == '/')) {
-			// reference to current directory, ignore
-		} else if (token[0] == '.' && token[1] == '.' && (token[2] == '\0' || token[2] == '/')) {
-			// walk up one directory, but not if it's the last one, because /.. -> /
-			if (numComponents > 0) {
-				numComponents--;
-				if (numComponents > 0) {
-					// move dstoffset back to the previous entry
-					path_component_t *lastComponent = pathComponents + (numComponents - 1);
-					*dstoffset = lastComponent->startidx + lastComponent->len + 1;
-				} else {
-					// we're at the top, move dstoffset back to the beginning
-					*dstoffset = 1;
-				}
-				normPath[*dstoffset] = '\0';
-			}
-		} else {
-			// copy token to normPath buffer (and null-terminate it)
-			__darwintrace_ensure_size_string(&normPath, normPathLen, *dstoffset + idx + 1);
-			strlcpy(normPath + *dstoffset, token, idx + 1);
-			normPath[*dstoffset + idx] = '\0';
-			// add descriptor entry for new token
-			__darwintrace_ensure_size_pathcomponents(&pathComponents, maxPathComponents, numComponents + 1);
-			pathComponents[numComponents].startidx = *dstoffset;
-			pathComponents[numComponents].len = idx;
-			numComponents++;
-
-			// advance destination
-			*dstoffset += idx + 1;
-		}
-
-		if (token[idx] == '\0') {
-			break;
-		}
-		token += idx + 1;
-	}
-
-	return numComponents;
-}
-
 /**
  * Check a path against the current sandbox
  *
@@ -889,11 +829,12 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 
 	size_t dstoffset = 0;
 	const char *token = NULL;
+	size_t idx;
 	if (*path != '/') {
 		/*
 		 * The path isn't absolute, start by populating pathcomponents with the
 		 * current working directory.
-		 *
+		 * 
 		 * However, we avoid getcwd(3) if we can and use getattrlist(2) with
 		 * ATTR_CMN_FULLPATH instead, because getcwd(3) will open all parent
 		 * directories, read them, search for the current component using its
@@ -939,23 +880,18 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 #		endif /* defined(ATTR_CMN_FULLPATH) */
 
 		char *writableToken = normPath + 1;
-		while (*writableToken != '\0') {
-			size_t idx = strcspn(writableToken, "/");
+		while ((idx = strcspn(writableToken, "/")) > 0) {
+			// found a token, tokenize and store it
+			__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
+			pathComponents[numComponents].startidx = writableToken - normPath;
+			pathComponents[numComponents].len = idx;
+			numComponents++;
 
-			if (idx > 0) {
-				// found a token, tokenize and store it
-				__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
-				pathComponents[numComponents].startidx = writableToken - normPath;
-				pathComponents[numComponents].len = idx;
-				numComponents++;
-			}
-
-			if (writableToken[idx] == '\0') {
+			bool final = writableToken[idx] == '\0';
+			writableToken[idx] = '\0';
+			if (final) {
 				break;
 			}
-
-			writableToken[idx] = '\0';
-
 			// advance token
 			writableToken += idx + 1;
 		}
@@ -965,13 +901,10 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 			path_component_t *lastComponent = pathComponents + (numComponents - 1);
 			dstoffset = lastComponent->startidx + lastComponent->len + 1;
 		} else {
-			// This is dead code; it could only happen for empty paths (which
-			// we filter above), because otherwise the loop above that
-			// increases numComponents must have run at least once.
 			dstoffset = 1;
 		}
 
-		// continue parsing at the beginning of path
+		// continue parsing at the begin of path
 		token = path;
 	} else {
 		// skip leading '/'
@@ -983,7 +916,46 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 	/* Make sure the path is normalized. NOTE: Do _not_ use realpath(3) here.
 	 * Doing so _will_ lead to problems. This is essentially a very simple
 	 * re-implementation of realpath(3). */
-	numComponents = __parse_path_normalize(token, &dstoffset, numComponents, pathComponents, &maxPathComponents, normPath, &normPathLen);
+	while ((idx = strcspn(token, "/")) > 0) {
+		// found a token, process it
+
+		if (token[0] == '\0' || token[0] == '/') {
+			// empty entry, ignore
+		} else if (token[0] == '.' && (token[1] == '\0' || token[1] == '/')) {
+			// reference to current directory, ignore
+		} else if (token[0] == '.' && token[1] == '.' && (token[2] == '\0' || token[2] == '/')) {
+			// walk up one directory, but not if it's the last one, because /.. -> /
+			if (numComponents > 0) {
+				numComponents--;
+				if (numComponents > 0) {
+					// move dstoffset back to the previous entry
+					path_component_t *lastComponent = pathComponents + (numComponents - 1);
+					dstoffset = lastComponent->startidx + lastComponent->len + 1;
+				} else {
+					// we're at the top, move dstoffset back to the beginning
+					dstoffset = 1;
+				}
+			}
+		} else {
+			// copy token to normPath buffer (and null-terminate it)
+			__darwintrace_ensure_size_string(&normPath, &normPathLen, dstoffset + idx + 1);
+			strlcpy(normPath + dstoffset, token, idx + 1);
+			normPath[dstoffset + idx] = '\0';
+			// add descriptor entry for new token
+			__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
+			pathComponents[numComponents].startidx = dstoffset;
+			pathComponents[numComponents].len = idx;
+			numComponents++;
+
+			// advance destination
+			dstoffset += idx + 1;
+		}
+
+		if (token[idx] == '\0') {
+			break;
+		}
+		token += idx + 1;
+	}
 
 	// strip off resource forks
 	if (numComponents >= 2 &&
@@ -1027,23 +999,18 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 
 			numComponents = 0;
 			char *writableToken = normPath + 1;
-			while (*writableToken != '\0') {
-				size_t idx = strcspn(writableToken, "/");
+			while ((idx = strcspn(writableToken, "/")) > 0) {
 				// found a token, tokenize and store it
+				__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
+				pathComponents[numComponents].startidx = writableToken - normPath;
+				pathComponents[numComponents].len = idx;
+				numComponents++;
 
-				if (idx > 0) {
-					__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
-					pathComponents[numComponents].startidx = writableToken - normPath;
-					pathComponents[numComponents].len = idx;
-					numComponents++;
-				}
-
-				if (writableToken[idx] == '\0') {
+				bool final = writableToken[idx] == '\0';
+				writableToken[idx] = '\0';
+				if (final) {
 					break;
 				}
-
-				writableToken[idx] = '\0';
-
 				// advance token
 				writableToken += idx + 1;
 			}
@@ -1131,7 +1098,46 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 				}
 			}
 
-			numComponents = __parse_path_normalize(token, &dstoffset, numComponents, pathComponents, &maxPathComponents, normPath, &normPathLen);
+			while ((idx = strcspn(token, "/")) > 0) {
+				// found a token, process it
+
+				if (token[0] == '\0' || token[0] == '/') {
+					// empty entry, ignore
+				} else if (token[0] == '.' && (token[1] == '\0' || token[1] == '/')) {
+					// reference to current directory, ignore
+				} else if (token[0] == '.' && token[1] == '.' && (token[2] == '\0' || token[2] == '/')) {
+					// walk up one directory, but not if it's the last one, because /.. -> /
+					if (numComponents > 0) {
+						numComponents--;
+						if (numComponents > 0) {
+							// move dstoffset back to the previous entry
+							path_component_t *lastComponent = pathComponents + (numComponents - 1);
+							dstoffset = lastComponent->startidx + lastComponent->len + 1;
+						} else {
+							// we're at the top, move dstoffset back to the beginning
+							dstoffset = 1;
+						}
+					}
+				} else {
+					// copy token to normPath buffer (and null-terminate it)
+					__darwintrace_ensure_size_string(&normPath, &normPathLen, dstoffset + idx + 1);
+					strlcpy(normPath + dstoffset, token, idx + 1);
+					normPath[dstoffset + idx] = '\0';
+					// add descriptor entry for new token
+					__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
+					pathComponents[numComponents].startidx = dstoffset;
+					pathComponents[numComponents].len = idx;
+					numComponents++;
+
+					// advance destination
+					dstoffset += idx + 1;
+				}
+
+				if (token[idx] == '\0') {
+					break;
+				}
+				token += idx + 1;
+			}
 
 			free(link);
 		}
