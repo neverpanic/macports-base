@@ -713,25 +713,91 @@ static inline bool __darwintrace_sandbox_check(const char *path, int flags) {
 	return false;
 }
 
-/* Private struct for __darwintrace_is_in_sandbox */
+/**
+ * Check whether the given buffer size is large enough, and realloc(3) the
+ * memory region at **string if it isn't. When a reallocation is required, will
+ * update *string to point to the reallocated region and *current to contain
+ * the new size.
+ *
+ * If sufficient memory cannot be allocated, this function prints an error
+ * message and aborts. Conseuqently, you can assume that this function never
+ * fails.
+ *
+ * \param[inout] string A pointer to the char array to be reallocated
+ * \param[inout] current A pointer to the variable holding the current size of the
+ *                       buffer.
+ * \param[in] required The required size of the buffer for the next operation.
+ */
+static void __darwintrace_ensure_size_string(char **string, size_t *current, size_t required) {
+	if (*current < required) {
+		// Let's reserve a bit more space to avoid realloc(3) on every
+		// iteration of a loop.
+		size_t newsize = ((MAX(0x100, required) - 1) | 0xff) + 1;
+		char *new = realloc(*string, newsize);
+		debug_printf("realloc(string=%p, current=%lu, newsize=%lu, required=%lu) = %p\n", *string, *current, newsize, required, new);
+		if (new == NULL) {
+			perror("darwintrace: realloc");
+			abort();
+		}
+		*current = newsize;
+		*string = new;
+	}
+}
+
+/**
+ * Index structure that allows tracking components of a path in a structured
+ * manner.
+ */
 typedef struct {
-	char *start;
+	size_t startidx;
 	size_t len;
 } path_component_t;
+
+/**
+ * Check whether the given path components array is long enough, and realloc(3)
+ * the array at *components if is is not. When a reallocation is required,
+ * update *components to point to the reallocated region and *current to
+ * contain the new maximum number of array elements.
+ *
+ * If sufficient memory cannot be allocated, this function prints an error
+ * message and aborts. Conseuqently, you can assume that this function never
+ * fails.
+ *
+ * \param[inout] components A pointer to the array of path_component_t to be
+ *                          reallocated
+ * \param[inout] current A pointer to the variable holding the current maximum
+ *                       number of elements in the array.
+ * \param[in] required The required number of elements in the array.
+ */
+static void __darwintrace_ensure_size_pathcomponents(path_component_t **components, size_t *current, size_t required) {
+	if (*current < required) {
+		// Let's reserve a bit more space to avoid realloc(3) on every
+		// iteration of a loop.
+		size_t newsize = ((MAX(0x40, required) - 1) | 0x3f) + 1;
+		path_component_t *new = realloc(*components, sizeof(path_component_t) * newsize);
+		debug_printf("realloc(paths=%p, current=%lu, newsize=%lu, required=%lu) = %p\n", *components, *current, newsize, required, new);
+		if (new == NULL) {
+			perror("darwintrace: realloc");
+			abort();
+		}
+		*current = newsize;
+		*components = new;
+	}
+}
 
 /*
  * Helper function for __darwintrace_is_in_sandbox.
  *
  * \param[in] token path to parse
- * \param[in] dst write position in normPath buffer
+ * \param[in] dstoffset write offset in normPath buffer
  * \param[in] numComponents number of parsed components
  * \param[in,out] pathComponents array of parsed components
  * \param[out] normPath output buffer
  * \return next numComponents
  */
-static size_t __parse_path_normalize(const char *token, char *dst, size_t numComponents, path_component_t *pathComponents, char *normPath) {
-	size_t idx;
-	while ((idx = strcspn(token, "/")) > 0) {
+static size_t __parse_path_normalize(const char *token, size_t *dstoffset, size_t numComponents, path_component_t *pathComponents, size_t *maxPathComponents, char *normPath, size_t *normPathLen) {
+	while (*token != '\0') {
+		size_t idx = strcspn(token, "/");
 		// found a token, process it
 
 		if (token[0] == '\0' || token[0] == '/') {
@@ -743,25 +809,28 @@ static size_t __parse_path_normalize(const char *token, char *dst, size_t numCom
 			if (numComponents > 0) {
 				numComponents--;
 				if (numComponents > 0) {
-					// move dst back to the previous entry
+					// move dstoffset back to the previous entry
 					path_component_t *lastComponent = pathComponents + (numComponents - 1);
-					dst = lastComponent->start + lastComponent->len + 1;
+					*dstoffset = lastComponent->startidx + lastComponent->len + 1;
 				} else {
-					// we're at the top, move dst back to the beginning
-					dst = normPath + 1;
+					// we're at the top, move dstoffset back to the beginning
+					*dstoffset = 1;
 				}
+				normPath[*dstoffset] = '\0';
 			}
 		} else {
 			// copy token to normPath buffer (and null-terminate it)
-			strlcpy(dst, token, idx + 1);
-			dst[idx] = '\0';
+			__darwintrace_ensure_size_string(&normPath, normPathLen, *dstoffset + idx + 1);
+			strlcpy(normPath + *dstoffset, token, idx + 1);
+			normPath[*dstoffset + idx] = '\0';
 			// add descriptor entry for new token
-			pathComponents[numComponents].start = dst;
-			pathComponents[numComponents].len   = idx;
+			__darwintrace_ensure_size_pathcomponents(&pathComponents, maxPathComponents, numComponents + 1);
+			pathComponents[numComponents].startidx = *dstoffset;
+			pathComponents[numComponents].len = idx;
 			numComponents++;
 
 			// advance destination
-			dst += idx + 1;
+			*dstoffset += idx + 1;
 		}
 
 		if (token[idx] == '\0') {
@@ -795,11 +864,21 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 		return true;
 	}
 
-	char normPath[MAXPATHLEN];
+	size_t normPathLen = MAXPATHLEN / 2 /* most paths don't need quite as much storage */;
+	char *normPath = malloc(normPathLen);
+	if (normPath == NULL) {
+		perror("darwintrace: malloc");
+		abort();
+	}
 	normPath[0] = '/';
 	normPath[1] = '\0';
 
-	path_component_t pathComponents[MAXPATHLEN / 2 + 2];
+	size_t maxPathComponents = normPathLen / 2 + 2;
+	path_component_t *pathComponents = malloc(sizeof(path_component_t) * maxPathComponents);
+	if (pathComponents == NULL) {
+		perror("darwintrace: malloc");
+		abort();
+	}
 	size_t numComponents = 0;
 
 	// Make sure the path is absolute.
@@ -808,7 +887,7 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 		return true;
 	}
 
-	char *dst = NULL;
+	size_t dstoffset = 0;
 	const char *token = NULL;
 	size_t idx;
 	if (*path != '/') {
@@ -833,28 +912,39 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 		attrlist.fileattr = 0;
 		attrlist.forkattr = 0;
 
-		char attrbuf[sizeof(uint32_t) + sizeof(attrreference_t) + (PATH_MAX + 1)];
-		/*           attrlength         attrref_t for the name     UTF-8 name up to PATH_MAX chars */
+		size_t attrbufSize = sizeof(uint32_t) + sizeof(attrreference_t) + (PATH_MAX + 1);
+		/*                   attrlength         attrref_t for the name     UTF-8 name up to PATH_MAX chars */
+		char *attrbuf = malloc(attrbufSize);
+		if (attrbuf == NULL) {
+			perror("darwintrace: malloc");
+			abort();
+		}
 
 		// FIXME This sometimes violates the stack canary
-		if (-1 == (getattrlist(".", &attrlist, attrbuf, sizeof(attrbuf), FSOPT_NOFOLLOW))) {
+		if (-1 == (getattrlist(".", &attrlist, attrbuf, attrbufSize, FSOPT_NOFOLLOW))) {
 			perror("darwintrace: getattrlist");
 			abort();
 		}
 		attrreference_t *nameAttrRef = (attrreference_t *) (attrbuf + sizeof(uint32_t));
-		strlcpy(normPath, ((char *) nameAttrRef) + nameAttrRef->attr_dataoffset, sizeof(normPath));
+		__darwintrace_ensure_size_string(&normPath, &normPathLen, strlen(((char *) nameAttrRef) + nameAttrRef->attr_dataoffset) + 1);
+		strlcpy(normPath, ((char *) nameAttrRef) + nameAttrRef->attr_dataoffset, normPathLen);
 #		else /* defined(ATTR_CMN_FULLPATH) */
-		if (getcwd(normPath, sizeof(normPath)) == NULL) {
+		char *cwd = getcwd(NULL, 0);
+		if (cwd == NULL) {
 			perror("darwintrace: getcwd");
 			abort();
 		}
+		__darwintrace_ensure_size_string(&normPath, &normPathLen, strlen(cwd) + 1);
+		strlcpy(normPath, cwd, normPathLen);
+		free(cwd);
 #		endif /* defined(ATTR_CMN_FULLPATH) */
 
 		char *writableToken = normPath + 1;
 		while ((idx = strcspn(writableToken, "/")) > 0) {
 			// found a token, tokenize and store it
-			pathComponents[numComponents].start = writableToken;
-			pathComponents[numComponents].len   = idx;
+			__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
+			pathComponents[numComponents].startidx = writableToken - normPath;
+			pathComponents[numComponents].len = idx;
 			numComponents++;
 
 			bool final = writableToken[idx] == '\0';
@@ -869,42 +959,42 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 		// copy path after the CWD into the buffer and normalize it
 		if (numComponents > 0) {
 			path_component_t *lastComponent = pathComponents + (numComponents - 1);
-			dst = lastComponent->start + lastComponent->len + 1;
+			dstoffset = lastComponent->startidx + lastComponent->len + 1;
 		} else {
-			dst = normPath + 1;
+			dstoffset = 1;
 		}
 
 		// continue parsing at the begin of path
 		token = path;
 	} else {
 		// skip leading '/'
-		dst = normPath + 1;
-		*dst = '\0';
+		dstoffset = 1;
+		normPath[dstoffset] = '\0';
 		token = path + 1;
 	}
 
 	/* Make sure the path is normalized. NOTE: Do _not_ use realpath(3) here.
 	 * Doing so _will_ lead to problems. This is essentially a very simple
 	 * re-implementation of realpath(3). */
-	numComponents = __parse_path_normalize(token, dst, numComponents, pathComponents, normPath);
+	numComponents = __parse_path_normalize(token, &dstoffset, numComponents, pathComponents, &maxPathComponents, normPath, &normPathLen);
 
 	// strip off resource forks
 	if (numComponents >= 2 &&
-		strcmp("..namedfork", pathComponents[numComponents - 2].start) == 0 &&
-		strcmp("rsrc", pathComponents[numComponents - 1].start) == 0) {
+		strncmp("..namedfork", normPath + pathComponents[numComponents - 2].startidx, pathComponents[numComponents - 2].len) == 0 &&
+		strncmp("rsrc", normPath + pathComponents[numComponents - 1].startidx, pathComponents[numComponents - 1].len) == 0) {
 		numComponents -= 2;
 	}
 
 #	ifdef ATTR_CMN_FULLPATH
-	if (numComponents >= 3 && strncmp(".vol", pathComponents[0].start, pathComponents[0].len) == 0) {
+	if (numComponents >= 3 && strncmp(".vol", normPath + pathComponents[0].startidx, pathComponents[0].len) == 0) {
 		// path in VOLFS, try to get inode -> name lookup from getattrlist(2).
 
 		// Add the slashes and the terminating \0
 		for (size_t i = 0; i < numComponents; ++i) {
 			if (i == numComponents - 1) {
-				pathComponents[i].start[pathComponents[i].len] = '\0';
+				normPath[pathComponents[i].startidx + pathComponents[i].len] = '\0';
 			} else {
-				pathComponents[i].start[pathComponents[i].len] = '/';
+				normPath[pathComponents[i].startidx + pathComponents[i].len] = '/';
 			}
 		}
 
@@ -925,14 +1015,16 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 			// ignore and just return the /.vol/ path
 		} else {
 			attrreference_t *nameAttrRef = (attrreference_t *) (attrbuf + sizeof(uint32_t));
-			strlcpy(normPath, ((char *) nameAttrRef) + nameAttrRef->attr_dataoffset, sizeof(normPath));
+			__darwintrace_ensure_size_string(&normPath, &normPathLen, strlen(((char *) nameAttrRef) + nameAttrRef->attr_dataoffset) + 1);
+			strlcpy(normPath, ((char *) nameAttrRef) + nameAttrRef->attr_dataoffset, normPathLen);
 
 			numComponents = 0;
 			char *writableToken = normPath + 1;
 			while ((idx = strcspn(writableToken, "/")) > 0) {
 				// found a token, tokenize and store it
-				pathComponents[numComponents].start = writableToken;
-				pathComponents[numComponents].len   = idx;
+				__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
+				pathComponents[numComponents].startidx = writableToken - normPath;
+				pathComponents[numComponents].len = idx;
 				numComponents++;
 
 				bool final = writableToken[idx] == '\0';
@@ -955,9 +1047,9 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 		// Add the slashes and the terminating \0
 		for (size_t i = 0; i < numComponents; ++i) {
 			if (i == numComponents - 1) {
-				pathComponents[i].start[pathComponents[i].len] = '\0';
+				normPath[pathComponents[i].startidx + pathComponents[i].len] = '\0';
 			} else {
-				pathComponents[i].start[pathComponents[i].len] = '/';
+				normPath[pathComponents[i].startidx + pathComponents[i].len] = '/';
 			}
 		}
 
@@ -983,41 +1075,57 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 				return false;
 			}
 
-			char link[MAXPATHLEN];
-			pathIsSymlink = true;
-
-			ssize_t linksize;
-			if (-1 == (linksize = readlink(normPath, link, sizeof(link)))) {
-				perror("darwintrace: readlink");
+			size_t maxLinkLength = MAXPATHLEN;
+			char *link = malloc(maxLinkLength);
+			if (link == NULL) {
+				perror("darwintrace: malloc");
 				abort();
 			}
-			link[linksize] = '\0';
-			//debug_printf("readlink(%s) = %s\n", normPath, link);
+			pathIsSymlink = true;
+
+			while (true) {
+				ssize_t linksize;
+				if (-1 == (linksize = readlink(normPath, link, maxLinkLength - 1))) {
+					perror("darwintrace: readlink");
+					abort();
+				}
+				link[linksize] = '\0';
+				if ((size_t) linksize < maxLinkLength - 1) {
+					// The link did fit the buffer
+					break;
+				}
+
+				__darwintrace_ensure_size_string(&link, &maxLinkLength, maxLinkLength + MAXPATHLEN);
+			}
 
 			if (*link == '/') {
 				// symlink is absolute, start fresh
 				numComponents = 0;
 				token = link + 1;
-				dst = normPath + 1;
+				dstoffset = 1;
 			} else {
 				// symlink is relative, remove last component
 				token = link;
 				if (numComponents > 0) {
 					numComponents--;
 					if (numComponents > 0) {
-						// move dst back to the previous entry
+						// move dstoffset back to the previous entry
 						path_component_t *lastComponent = pathComponents + (numComponents - 1);
-						dst = lastComponent->start + lastComponent->len + 1;
+						dstoffset = lastComponent->startidx + lastComponent->len + 1;
 					} else {
-						// we're at the top, move dst back to the beginning
-						dst = normPath + 1;
+						// we're at the top, move dstoffset back to the beginning
+						dstoffset = 1;
 					}
 				}
 			}
 
-			numComponents = __parse_path_normalize(token, dst, numComponents, pathComponents, normPath);
+			numComponents = __parse_path_normalize(token, &dstoffset, numComponents, pathComponents, &maxPathComponents, normPath, &normPathLen);
+
+			free(link);
 		}
 	} while (pathIsSymlink);
 
-	return __darwintrace_sandbox_check(normPath, flags);
+	bool result = __darwintrace_sandbox_check(normPath, flags);
+	free(normPath);
+	return result;
 }
