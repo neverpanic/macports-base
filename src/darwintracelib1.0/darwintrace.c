@@ -796,8 +796,8 @@ static void __darwintrace_ensure_size_pathcomponents(path_component_t **componen
  * \return next numComponents
  */
 static size_t __parse_path_normalize(const char *token, size_t *dstoffset, size_t numComponents, path_component_t *pathComponents, size_t *maxPathComponents, char *normPath, size_t *normPathLen) {
-	size_t idx;
-	while ((idx = strcspn(token, "/")) > 0) {
+	while (*token != '\0') {
+		size_t idx = strcspn(token, "/");
 		// found a token, process it
 
 		if (token[0] == '\0' || token[0] == '/') {
@@ -809,13 +809,14 @@ static size_t __parse_path_normalize(const char *token, size_t *dstoffset, size_
 			if (numComponents > 0) {
 				numComponents--;
 				if (numComponents > 0) {
-					// move dst back to the previous entry
+					// move dstoffset back to the previous entry
 					path_component_t *lastComponent = pathComponents + (numComponents - 1);
 					*dstoffset = lastComponent->startidx + lastComponent->len + 1;
 				} else {
-					// we're at the top, move dst back to the beginning
+					// we're at the top, move dstoffset back to the beginning
 					*dstoffset = 1;
 				}
+				normPath[*dstoffset] = '\0';
 			}
 		} else {
 			// copy token to normPath buffer (and null-terminate it)
@@ -888,12 +889,11 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 
 	size_t dstoffset = 0;
 	const char *token = NULL;
-	size_t idx;
 	if (*path != '/') {
 		/*
 		 * The path isn't absolute, start by populating pathcomponents with the
 		 * current working directory.
-		 * 
+		 *
 		 * However, we avoid getcwd(3) if we can and use getattrlist(2) with
 		 * ATTR_CMN_FULLPATH instead, because getcwd(3) will open all parent
 		 * directories, read them, search for the current component using its
@@ -939,18 +939,23 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 #		endif /* defined(ATTR_CMN_FULLPATH) */
 
 		char *writableToken = normPath + 1;
-		while ((idx = strcspn(writableToken, "/")) > 0) {
-			// found a token, tokenize and store it
-			__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
-			pathComponents[numComponents].startidx = writableToken - normPath;
-			pathComponents[numComponents].len = idx;
-			numComponents++;
+		while (*writableToken != '\0') {
+			size_t idx = strcspn(writableToken, "/");
 
-			bool final = writableToken[idx] == '\0';
-			writableToken[idx] = '\0';
-			if (final) {
+			if (idx > 0) {
+				// found a token, tokenize and store it
+				__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
+				pathComponents[numComponents].startidx = writableToken - normPath;
+				pathComponents[numComponents].len = idx;
+				numComponents++;
+			}
+
+			if (writableToken[idx] == '\0') {
 				break;
 			}
+
+			writableToken[idx] = '\0';
+
 			// advance token
 			writableToken += idx + 1;
 		}
@@ -960,10 +965,13 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 			path_component_t *lastComponent = pathComponents + (numComponents - 1);
 			dstoffset = lastComponent->startidx + lastComponent->len + 1;
 		} else {
+			// This is dead code; it could only happen for empty paths (which
+			// we filter above), because otherwise the loop above that
+			// increases numComponents must have run at least once.
 			dstoffset = 1;
 		}
 
-		// continue parsing at the begin of path
+		// continue parsing at the beginning of path
 		token = path;
 	} else {
 		// skip leading '/'
@@ -1019,18 +1027,23 @@ bool __darwintrace_is_in_sandbox(const char *path, int flags) {
 
 			numComponents = 0;
 			char *writableToken = normPath + 1;
-			while ((idx = strcspn(writableToken, "/")) > 0) {
+			while (*writableToken != '\0') {
+				size_t idx = strcspn(writableToken, "/");
 				// found a token, tokenize and store it
-				__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
-				pathComponents[numComponents].startidx = writableToken - normPath;
-				pathComponents[numComponents].len = idx;
-				numComponents++;
 
-				bool final = writableToken[idx] == '\0';
-				writableToken[idx] = '\0';
-				if (final) {
+				if (idx > 0) {
+					__darwintrace_ensure_size_pathcomponents(&pathComponents, &maxPathComponents, numComponents + 1);
+					pathComponents[numComponents].startidx = writableToken - normPath;
+					pathComponents[numComponents].len = idx;
+					numComponents++;
+				}
+
+				if (writableToken[idx] == '\0') {
 					break;
 				}
+
+				writableToken[idx] = '\0';
+
 				// advance token
 				writableToken += idx + 1;
 			}
