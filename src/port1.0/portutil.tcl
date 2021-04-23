@@ -2411,27 +2411,26 @@ proc adduser {name args} {
             exec -ignorestderr $dscl . -create /Users/${name} PrimaryGroupID ${gid}
             exec -ignorestderr $dscl . -create /Users/${name} NFSHomeDirectory ${home}
             exec -ignorestderr $dscl . -create /Users/${name} UserShell ${shell}
-        } on error {{CHILDKILLED *} eCode eMessage} {
-            # the foreachs are a simple workaround for Tcl 8.4, which doesn't
-            # seem to have lassign
-            foreach {- pid sigName msg} $eCode {
-                ui_error "dscl($pid) was killed by $sigName: $msg"
-                ui_debug "dscl printed: $eMessage"
-            }
+        } trap CHILDKILLED {eMessage eOptions} {
+            lassign [dict get $eOptions -errorcode] _ pid sigName msg
+            ui_error "dscl($pid) was killed by $sigName: $msg"
+            ui_debug "dscl printed: $eMessage"
 
             set failed? 1
-        } on error {{CHILDSTATUS *} eCode eMessage} {
-            foreach {- pid code} $eCode {
-                ui_error "dscl($pid) terminated with an exit status of $code"
-                ui_debug "dscl printed: $eMessage"
-            }
+        } trap CHILDSTATUS {eMessage eOptions} {
+            lassign [dict get $eOptions -errorcode] _ pid code
+            ui_error "dscl($pid) terminated with an exit status of $code"
+            ui_debug "dscl printed: $eMessage"
             
             set failed? 1
-        } on error {{POSIX *} eCode eMessage} {
-            foreach {- errName msg} {
-                ui_error "failed to execute $dscl: $errName: $msg"
-                ui_debug "dscl printed: $eMessage"
-            }
+        } trap POSIX {eMessage eOptions} {
+            lassign [dict get $eOptions -errorcode] _ errName msg
+            ui_error "failed to execute $dscl: $errName: $msg"
+            ui_debug "dscl printed: $eMessage"
+
+            set failed? 1
+        } on error {eMessage eOptions} {
+            ui_error "failed to create user ${name}: $eMessage ([dict get $eOptions -errorcode])"
 
             set failed? 1
         } finally {
@@ -2442,19 +2441,17 @@ proc adduser {name args} {
                 ui_debug "Attempting to clean up failed creation of user $name"
                 macports_try {
                     exec -ignorestderr $dscl . -delete /Users/${name}
-                } on error {{CHILDKILLED *} eCode eMessage} {
-                    foreach {- pid sigName msg} {
-                        ui_warn "dscl($pid) was killed by $sigName: $msg while trying to clean up failed creation of user $name."
-                        ui_debug "dscl printed: $eMessage"
-                    }
-                } on error {{CHILDSTATUS *} eCode eMessage} {
+                } trap CHILDKILLED {eMessage eOptions} {
+                    lassign [dict get $eOptions -errorcode] _ pid sigName msg
+                    ui_warn "dscl($pid) was killed by $sigName: $msg while trying to clean up failed creation of user $name."
+                    ui_debug "dscl printed: $eMessage"
+                } trap CHILDSTATUS {} {
                     # ignoring childstatus failure, because that probably means
                     # the first call failed and the user wasn't even created
-                } on error {{POSIX *} eCode eMessage} {
-                    foreach {- errName msg} {
-                        ui_warn "failed to execute $dscl: $errName: $msg while trying to clean up failed creation of user $name."
-                        ui_debug "dscl printed: $eMessage"
-                    }
+                } trap POSIX {eMessage eOptions} {
+                    lassign [dict get $eOptions -errorcode] _ errName msg
+                    ui_warn "failed to execute $dscl: $errName: $msg while trying to clean up failed creation of user $name."
+                    ui_debug "dscl printed: $eMessage"
                 }
 
                 # drop privileges if they were escalated before
@@ -2517,27 +2514,26 @@ proc addgroup {name args} {
             if {${users} ne ""} {
                 exec -ignorestderr $dscl . -create /Groups/${name} GroupMembership ${users}
             }
-        } on error {{CHILDKILLED *} eCode eMessage} {
-            # the foreachs are a simple workaround for Tcl 8.4, which doesn't
-            # seem to have lassign
-            foreach {- pid sigName msg} $eCode {
-                ui_error "dscl($pid) was killed by $sigName: $msg"
-                ui_debug "dscl printed: $eMessage"
-            }
+        } trap CHILDKILLED {eMessage eOptions} {
+            lassign [dict get $eOptions -errorcode] _ pid sigName msg
+            ui_error "dscl($pid) was killed by $sigName: $msg"
+            ui_debug "dscl printed: $eMessage"
 
             set failed? 1
-        } on error {{CHILDSTATUS *} eCode eMessage} {
-            foreach {- pid code} $eCode {
-                ui_error "dscl($pid) terminated with an exit status of $code"
-                ui_debug "dscl printed: $eMessage"
-            }
+        } trap CHILDSTATUS {eMessage eOptions} {
+            lassign [dict get $eOptions -errorcode] _ pid code
+            ui_error "dscl($pid) terminated with an exit status of $code"
+            ui_debug "dscl printed: $eMessage"
             
             set failed? 1
-        } on error {{POSIX *} eCode eMessage} {
-            foreach {- errName msg} {
-                ui_error "failed to execute $dscl: $errName: $msg"
-                ui_debug "dscl printed: $eMessage"
-            }
+        } trap POSIX {eMessage eOptions} {
+            lassign [dict get $eOptions -errorcode] _ errName msg
+            ui_error "failed to execute $dscl: $errName: $msg"
+            ui_debug "dscl printed: $eMessage"
+
+            set failed? 1
+        } on error {eMessage eOptions} {
+            ui_error "failed to create group ${name}: $eMessage ([dict get $eOptions -errorcode])"
 
             set failed? 1
         } finally {
@@ -2548,19 +2544,17 @@ proc addgroup {name args} {
                 ui_debug "Attempting to clean up failed creation of group $name"
                 macports_try {
                     exec -ignorestderr $dscl . -delete /Groups/${name}
-                } on error {{CHILDKILLED *} eCode eMessage} {
-                    foreach {- pid sigName msg} {
-                        ui_warn "dscl($pid) was killed by $sigName: $msg while trying to clean up failed creation of group $name."
-                        ui_debug "dscl printed: $eMessage"
-                    }
-                } on error {{CHILDSTATUS *} eCode eMessage} {
+                } trap CHILDKILLED {eMessage eOptions} {
+                    lassign [dict get $eOptions -errorcode] _ pid sigName msg
+                    ui_warn "dscl($pid) was killed by $sigName: $msg while trying to clean up failed creation of group $name."
+                    ui_debug "dscl printed: $eMessage"
+                } trap CHILDSTATUS {} {
                     # ignoring childstatus failure, because that probably means
                     # the first call failed and the user wasn't even created
-                } on error {{POSIX *} eCode eMessage} {
-                    foreach {- errName msg} {
-                        ui_warn "failed to execute $dscl: $errName: $msg while trying to clean up failed creation of group $name."
-                        ui_debug "dscl printed: $eMessage"
-                    }
+                } trap POSIX {eMessage eOptions} {
+                    lassign [dict get $eOptions -errorcode] _ errName msg
+                    ui_warn "failed to execute $dscl: $errName: $msg while trying to clean up failed creation of group $name."
+                    ui_debug "dscl printed: $eMessage"
                 }
 
                 if {[info exists escalated]} {
@@ -3383,12 +3377,12 @@ proc _check_xcode_version {} {
             12 {
                 set min 13.1
                 set ok 13.1
-                set rec 13.2.1
+                set rec 13.1
             }
             default {
                 set min 13.1
                 set ok 13.1
-                set rec 13.2.1
+                set rec 13.1
             }
         }
         if {$xcodeversion eq "none"} {
@@ -3519,7 +3513,6 @@ proc _archive_available {} {
         append site [option archive.subdir]
     }
     set url [portfetch::assemble_url $site $archivename]
-    ui_debug "Fetching $archivename archive size"
     # curl getsize can return -1 instead of throwing an error for
     # nonexistent files on FTP sites.
     if {![catch {curl getsize $url} size] && $size > 0} {
