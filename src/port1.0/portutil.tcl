@@ -2378,7 +2378,7 @@ proc adduser {name args} {
     if {${os.platform} eq "darwin"} {
         set dscl [findBinary dscl $portutil::autoconf::dscl_path]
         set failed? 0
-        try {
+        macports_try {
             exec -ignorestderr $dscl . -create /Users/${name} UniqueID ${uid}
 
             # These are implicitly added on Mac OS X Lion.  AuthenticationAuthority
@@ -2424,7 +2424,7 @@ proc adduser {name args} {
                 # anyway, try to delete the half-created user to revert to the
                 # state before the error
                 ui_debug "Attempting to clean up failed creation of user $name"
-                try {
+                macports_try {
                     exec -ignorestderr $dscl . -delete /Users/${name}
                 } catch {{CHILDKILLED *} eCode eMessage} {
                     foreach {- pid sigName msg} {
@@ -2494,7 +2494,7 @@ proc addgroup {name args} {
     if {${os.platform} eq "darwin"} {
         set dscl [findBinary dscl $portutil::autoconf::dscl_path]
         set failed? 0
-        try {
+        macports_try {
             exec -ignorestderr $dscl . -create /Groups/${name} Password ${passwd}
             exec -ignorestderr $dscl . -create /Groups/${name} RealName ${realname}
             exec -ignorestderr $dscl . -create /Groups/${name} PrimaryGroupID ${gid}
@@ -2530,7 +2530,7 @@ proc addgroup {name args} {
                 # anyway, try to delete the half-created user to revert to the
                 # state before the error
                 ui_debug "Attempting to clean up failed creation of group $name"
-                try {
+                macports_try {
                     exec -ignorestderr $dscl . -delete /Groups/${name}
                 } catch {{CHILDKILLED *} eCode eMessage} {
                     foreach {- pid sigName msg} {

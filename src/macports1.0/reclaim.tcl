@@ -134,9 +134,9 @@ namespace eval reclaim {
 
         if {${retval} == 0} {
             ui_info [msgcat::mc "Deleting all build directories under %s" $root_build]
-            try -pass_signal {
+            macports_try -pass_signal {
                 file delete -force -- {*}$builddirs
-            } catch {{*} eCode eMessage} {
+            } on error {eMessage} {
                 ui_debug "$::errorInfo"
                 ui_error "$eMessage"
             }
@@ -173,9 +173,9 @@ namespace eval reclaim {
 
         if {${retval} == 0} {
             ui_info [msgcat::mc "Deleting everything under %s" $macports::ccache_dir]
-            try -pass_signal {
+            macports_try -pass_signal {
                 file delete -force -- {*}$ccachedirs
-            } catch {{*} eCode eMessage} {
+            } on error {eMessage} {
                 ui_debug "$::errorInfo"
                 ui_error "$eMessage"
             }
@@ -253,9 +253,9 @@ namespace eval reclaim {
 
         foreach port $installed_ports {
             # Get mport reference
-            try -pass_signal {
+            macports_try -pass_signal {
                 set mport [mportopen_installed [$port name] [$port version] [$port revision] [$port variants] {}]
-            } catch {{*} eCode eMessage} {
+            } on error {eMessage} {
                 $progress intermission
                 ui_warn [msgcat::mc "Failed to open port %s from registry: %s" [$port name] $eMessage]
                 continue
@@ -337,7 +337,7 @@ namespace eval reclaim {
                             set root_length [string length "${root_dist}/"]
                             set home_length [string length "${home_dist}/"]
 
-                            try -pass_signal {
+                            macports_try -pass_signal {
                                 if {[macports::global_option_isset ports_dryrun]} {
                                     ui_info [msgcat::mc "Skipping deletion of unused file %s (dry run)" $f]
                                 } else {
@@ -362,15 +362,15 @@ namespace eval reclaim {
                                         ui_info [msgcat::mc "Skipping deletion of empty directory %s (dry run)" $directory]
                                     } else {
                                         ui_info [msgcat::mc "Deleting empty directory %s" $directory]
-                                        try -pass_signal {
+                                        macports_try -pass_signal {
                                             file delete -- $directory
-                                        } catch {{*} eCode eMessage} {
+                                        } on error {eMessage} {
                                             ui_warn [msgcat::mc "Could not delete empty directory %s: %s" $directory $eMesage]
                                         }
                                     }
                                     set directory [file dirname $directory]
                                 }
-                            } catch {{*} eCode eMessage} {
+                            } on error {eMessage} {
                                 ui_warn [msgcat::mc "Could not delete %s: %s" $f $eMessage]
                             }
                         }
@@ -399,10 +399,10 @@ namespace eval reclaim {
 
         set fd -1
         set contents ""
-        try -pass_signal {
+        macports_try -pass_signal {
             set fd [open $path r]
             set contents [gets $fd]
-        } catch {*} {
+        } on error {} {
             # Ignore error silently; the file might not have been created yet
         } finally {
             if {$fd != -1} {
@@ -415,10 +415,10 @@ namespace eval reclaim {
     proc write_last_run_file {contents} {
         set path [file join ${macports::portdbpath} last_reclaim]
         set fd -1
-        try -pass_signal {
+        macports_try -pass_signal {
             set fd [open $path w]
             puts $fd $contents
-        } catch {*} {
+        } on error {} {
             # Ignore error silently
         } finally {
             if {$fd != -1} {
@@ -561,9 +561,9 @@ namespace eval reclaim {
             } elseif {${retval} == 0} {
                 foreach port $inactive_ports {
                     # Note: 'uninstall' takes a name, version, revision, variants and an options list.
-                    try -pass_signal {
+                    macports_try -pass_signal {
                         registry_uninstall::uninstall [$port name] [$port version] [$port revision] [$port variants] {ports_force true}
-                    } catch {{*} eCode eMessage} {
+                    } on error {eMessage} {
                         ui_error "Error uninstalling $name: $eMessage"
                     }
                 }
@@ -633,9 +633,9 @@ namespace eval reclaim {
             } elseif {${retval} == 0} {
                 foreach port $unnecessary_ports {
                     # Note: 'uninstall' takes a name, version, revision, variants and an options list.
-                    try -pass_signal {
+                    macports_try -pass_signal {
                         registry_uninstall::uninstall [$port name] [$port version] [$port revision] [$port variants] {ports_force true}
-                    } catch {{*} eCode eMessage} {
+                    } on error {eMessage} {
                         ui_error "Error uninstalling $name: $eMessage"
                     }
                 }
