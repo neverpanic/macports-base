@@ -14091,7 +14091,7 @@ main ()
 {
 extern long timezone;
 	    timezone += 1;
-	    exit (0);
+	    return (0);
   ;
   return 0;
 }
@@ -14157,7 +14157,7 @@ main ()
 {
 extern time_t timezone;
 		timezone += 1;
-		exit (0);
+		return (0);
   ;
   return 0;
 }
